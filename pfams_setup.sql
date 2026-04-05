@@ -397,7 +397,7 @@ WHERE Status = 'Unpaid';
 -- =========================================
 DELIMITER $$
 
--- Procedure: Calculate total fine for a given account (includes dynamic penalty)
+-- Procedure 1: Calculate total fine for a given account (includes dynamic penalty)
 CREATE PROCEDURE GetUserTotalFine(IN acc_id INT)
 BEGIN
     SELECT SUM(f.FineAmount + IFNULL(IF(f.Status = 'Unpaid' AND CURDATE() > f.DueDate, DATEDIFF(CURDATE(), f.DueDate) * p.PenaltyPerDay, 0), 0)) AS TotalFine
@@ -407,4 +407,69 @@ BEGIN
     WHERE v.AccountID = acc_id;
 END$$
 
+-- Procedure 2: Get all fines filtered by status ('Paid' or 'Unpaid')
+CREATE PROCEDURE GetFinesByStatus(IN fine_status VARCHAR(10))
+BEGIN
+    SELECT f.FineID, CONCAT(u.FirstName, ' ', u.LastName) AS UserName,
+           vt.VName, v.Location, f.IssueDate, f.DueDate,
+           f.FineAmount AS BaseFine,
+           IFNULL(IF(f.Status = 'Unpaid' AND CURDATE() > f.DueDate, DATEDIFF(CURDATE(), f.DueDate) * p.PenaltyPerDay, 0), 0) AS Penalty,
+           (f.FineAmount + IFNULL(IF(f.Status = 'Unpaid' AND CURDATE() > f.DueDate, DATEDIFF(CURDATE(), f.DueDate) * p.PenaltyPerDay, 0), 0)) AS TotalAmount,
+           f.Status
+    FROM Fine f
+    JOIN Violation v ON f.ViolationID = v.ViolationID
+    JOIN ViolationType vt ON v.ViolationTypeID = vt.ViolationTypeID
+    JOIN Account a ON v.AccountID = a.AccountID
+    JOIN Users u ON a.UserID = u.UserID
+    LEFT JOIN Penalty p ON f.FineID = p.FineID
+    WHERE f.Status = fine_status
+    ORDER BY f.FineID DESC;
+END$$
+
 DELIMITER ;
+
+-- =========================================
+-- FUNCTIONS
+-- =========================================
+DELIMITER $$
+
+-- Function 1: Get current total outstanding fine balance for a user by Email
+CREATE FUNCTION getCurrentFineBalance(in_email VARCHAR(100))
+RETURNS DECIMAL(10,2)
+READS SQL DATA
+BEGIN
+    DECLARE cur_bal DECIMAL(10,2);
+    SELECT SUM(
+        f.FineAmount + IFNULL(
+            IF(f.Status = 'Unpaid' AND CURDATE() > f.DueDate,
+               DATEDIFF(CURDATE(), f.DueDate) * p.PenaltyPerDay,
+               0),
+            0)
+    ) INTO cur_bal
+    FROM Users u
+    JOIN Account a   ON u.UserID      = a.UserID
+    JOIN Violation v ON a.AccountID   = v.AccountID
+    JOIN Fine f      ON v.ViolationID = f.ViolationID
+    LEFT JOIN Penalty p ON f.FineID   = p.FineID
+    WHERE u.Email = in_email
+      AND f.Status = 'Unpaid';
+
+    RETURN IFNULL(cur_bal, 0.00);
+END$$
+-- SELECT getCurrentFineBalance('rahul@gmail.com') AS Balance;
+
+
+-- Function 2: Count total number of violations for a given account
+CREATE FUNCTION countUserViolations(acc_id INT)
+RETURNS INT
+READS SQL DATA
+BEGIN
+    DECLARE v_count INT;
+    SELECT COUNT(*) INTO v_count
+    FROM Violation
+    WHERE AccountID = acc_id;
+    RETURN IFNULL(v_count, 0);
+END$$
+
+DELIMITER ;
+-- SELECT countUserViolations(1) AS Count;
